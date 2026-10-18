@@ -149,10 +149,20 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
             return data
 
     async def _scan(self, day: date) -> None:
-        summary = await self._get_json(
-            BOE_SUMMARY.format(date=day.strftime("%Y%m%d"))
-        )
+        url = BOE_SUMMARY.format(date=day.strftime("%Y%m%d"))
+        try:
+            summary = await self._get_json(url)
+        except BOESummaryFormatError:
+            self.pending_days.add(day)
+            _LOGGER.warning(
+                "Invalid BOE summary for %s; scheduling retry: %s", day, url
+            )
+            return
+        except (ClientError, TimeoutError, ValueError) as err:
+            _LOGGER.error("BOE summary failed for %s (%s): %s", day, url, err)
+            raise
         if summary is None:
+            self.pending_days.discard(day)
             return
         ledger = TariffLedger(self.records, self.source_dates, self.review)
         for identifier, title in candidates(summary).items():
@@ -168,6 +178,7 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
         self.records, self.source_dates, self.review = (
             ledger.records, ledger.published, ledger.review
         )
+        self.pending_days.discard(day)
 
     async def _async_update_data(self) -> dict:
         today = dt_util.now().date()
@@ -191,6 +202,8 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
                 start = found_on + timedelta(days=1)
             else:
                 start = recovery_start(today, self.last_checked)
+            if self.pending_days:
+                start = min(start, min(self.pending_days))
             cursor = start
             while cursor <= today:
                 await self._scan(cursor)
@@ -200,10 +213,11 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
             modified = True
         except (ClientError, TimeoutError, ValueError, UpdateFailed) as err:
             if not self.records:
+                _LOGGER.error("Initial TUR Gas BOE load failed: %s", err)
                 raise UpdateFailed(f"Could not retrieve BOE data: {err}") from err
             # Never advance the watermark across a failed calendar day.
             self.problem = f"BOE polling failed: {err}"
-            _LOGGER.warning("Using last validated TUR: %s", self.problem)
+            _LOGGER.error("Retaining last validated TUR after BOE error: %s", self.problem)
             modified = True
         if modified:
             await self._save()
@@ -211,6 +225,12 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
             self.problem = (
                 f"{len(self.review)} BOE publication(s) require review; "
                 "tariffs have not been overwritten by corrections"
+            )
+        if self.pending_days:
+            days = ", ".join(day.isoformat() for day in sorted(self.pending_days))
+            _LOGGER.warning("BOE summary days awaiting retry: %s", days)
+            self.problem = "; ".join(
+                value for value in (self.problem, f"BOE retry pending: {days}") if value
             )
         return {"current": self.current(), "next": self.next(),
                 "problem": self.problem, "review": self.review}
