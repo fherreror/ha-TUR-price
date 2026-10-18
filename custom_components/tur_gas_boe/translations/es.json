@@ -14,9 +14,15 @@
       "init": {
         "title": "Configurar modalidad TUR",
         "data": {
-          "tariff": "Modalidad TUR"
+          "tariff": "Modalidad TUR",
+          "enagas_zone": "Zona de suministro (Enagás)",
+          "enagas_pressure": "Presión de suministro (mbar)",
+          "enagas_reading_type": "Tipo de lectura"
         }
       }
+    },
+    "error": {
+      "invalid_pressure": "Presión no válida."
     }
   }
 }
