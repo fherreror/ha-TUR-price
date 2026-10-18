@@ -12,7 +12,8 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .boe import Publication, Price, candidates, parse_document
+from .boe import Publication, Price, candidates
+from .recovery import TariffLedger, recovery_start
 from .const import BOE_SUMMARY, BOE_XML, DOMAIN, STORE_VERSION, UPDATE_HOURS
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
         self.source_dates: dict[str, date] = {}
         self.last_checked: date | None = None
         self.problem: str | None = None
+        self.review: dict[str, str] = {}
 
     async def async_load(self) -> None:
         raw = await self.store.async_load() or {}
@@ -49,6 +51,7 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
                 )
             except (ValueError, TypeError, KeyError):
                 _LOGGER.warning("Discarding malformed cached tariff for %s", effective)
+        self.review = dict(raw.get("review", {}))
         if raw.get("last_checked"):
             try:
                 self.last_checked = date.fromisoformat(raw["last_checked"])
@@ -58,6 +61,7 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
     async def _save(self) -> None:
         await self.store.async_save({
             "last_checked": self.last_checked.isoformat() if self.last_checked else None,
+            "review": self.review,
             "records": {
                 effective: {
                     "boe_id": record.boe_id,
@@ -121,21 +125,20 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
         )
         if summary is None:
             return
+        ledger = TariffLedger(self.records, self.source_dates, self.review)
         for identifier, title in candidates(summary).items():
-            try:
-                publication = parse_document(
-                    await self._get_xml(identifier), identifier
+            data = await self._get_xml(identifier)
+            result = ledger.add(identifier, title, day, data)
+            if result == "review":
+                _LOGGER.warning(
+                    "Official BOE publication %s requires manual review: %s",
+                    identifier, ledger.review[identifier],
                 )
-            except (ValueError, ET_PARSE_ERROR) as err:
-                self.problem = f"Cannot interpret {identifier}: {err}"
-                _LOGGER.warning("BOE candidate %s rejected (%s)", identifier, title)
-                continue
-            effective = publication.effective.isoformat()
-            if day < self.source_dates.get(effective, date.min):
-                continue
-            self.records[effective] = publication
-            self.source_dates[effective] = day
-            _LOGGER.info("Validated BOE %s effective %s", identifier, effective)
+            elif result == "applied":
+                _LOGGER.info("Validated %s published %s", identifier, day)
+        self.records, self.source_dates, self.review = (
+            ledger.records, ledger.published, ledger.review
+        )
 
     async def _async_update_data(self) -> dict:
         today = dt_util.now().date()
@@ -143,43 +146,41 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
         modified = False
         try:
             if not self.records:
+                # Bootstrap backwards until a current tariff is found;
+                # then scan forwards so future-dated publications are retained.
+                found_on = None
                 for days_back in range(185):
                     day = today - timedelta(days=days_back)
                     await self._scan(day)
                     if self.current(today):
-                        modified = True
+                        found_on = day
                         break
-                if not self.current(today):
+                if found_on is None:
                     raise UpdateFailed(
                         "No applicable official TUR resolution found in 185 days"
                     )
-                start = today + timedelta(days=1)
+                start = found_on + timedelta(days=1)
             else:
-                start = (
-                    self.last_checked - timedelta(days=3)
-                    if self.last_checked else today - timedelta(days=45)
-                )
+                start = recovery_start(today, self.last_checked)
             cursor = start
             while cursor <= today:
-                before = dict(self.records)
                 await self._scan(cursor)
-                modified |= self.records != before
                 cursor += timedelta(days=1)
-            if self.problem:
-                _LOGGER.warning("BOE tariff parser warning: %s", self.problem)
-            else:
-                self.last_checked = today
-                modified = True
-            if modified:
-                await self._save()
+            self.last_checked = today
+            modified = True
         except (ClientError, TimeoutError, ValueError, UpdateFailed) as err:
             if not self.records:
                 raise UpdateFailed(f"Could not retrieve BOE data: {err}") from err
+            # Never advance the watermark across a failed calendar day.
             self.problem = f"BOE polling failed: {err}"
             _LOGGER.warning("Using last validated TUR: %s", self.problem)
-        return {"current": self.current(), "next": self.next(), "problem": self.problem}
-
-
-# Exceptions raised by defusedxml/ElementTree are caught as nonfatal candidate
-# failures, never interpreted as a valid tariff.
-from defusedxml.ElementTree import ParseError as ET_PARSE_ERROR  # noqa: E402
+            modified = True
+        if modified:
+            await self._save()
+        if self.review:
+            self.problem = (
+                f"{len(self.review)} BOE publication(s) require review; "
+                "tariffs have not been overwritten by corrections"
+            )
+        return {"current": self.current(), "next": self.next(),
+                "problem": self.problem, "review": self.review}
