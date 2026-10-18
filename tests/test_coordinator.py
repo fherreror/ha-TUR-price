@@ -383,9 +383,10 @@ class TestCoordinator(unittest.IsolatedAsyncioTestCase):
                 state = await instance._async_update_data()
         self.assertEqual(state["current"].boe_id, NEW_ID)
         self.assertIn("2026-09-30", state["problem"])
-        self.assertEqual(instance.last_checked, date(2026, 9, 28))
+        self.assertEqual(instance.last_checked, date(2026, 10, 4))
         self.assertEqual(hass.storage["tur_gas_boe.tariffs"]["last_checked"],
-                         "2026-09-28")
+                         "2026-10-04")
+        self.assertIn(date(2026, 9, 30), instance.pending_days)
 
 
 if __name__ == "__main__":
