@@ -14,9 +14,15 @@
       "init": {
         "title": "Configure TUR tariff",
         "data": {
-          "tariff": "TUR tariff"
+          "tariff": "TUR tariff",
+          "enagas_zone": "Supply zone (Enagás)",
+          "enagas_pressure": "Supply pressure (mbar)",
+          "enagas_reading_type": "Reading frequency"
         }
       }
+    },
+    "error": {
+      "invalid_pressure": "Invalid supply pressure."
     }
   }
 }
