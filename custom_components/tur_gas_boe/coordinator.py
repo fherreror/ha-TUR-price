@@ -219,6 +219,14 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
         )
         self.pending_days.discard(day)
 
+    def current_conversion(self) -> ConversionFactor | None:
+        """Do not present an obsolete conversion as the current price."""
+        factor = self.conversion
+        if factor is None:
+            return None
+        age = (dt_util.now().date() - factor.measured_on).days
+        return factor if 0 <= age <= 14 else None
+
     async def async_refresh_enagas(self, options: dict) -> None:
         """Retrieve the official factor without affecting the BOE price update."""
         zone = options.get(CONF_ENAGAS_ZONE)
