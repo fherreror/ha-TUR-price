@@ -275,6 +275,42 @@ class TestCoordinator(unittest.IsolatedAsyncioTestCase):
         await restored.async_load()
         self.assertIn("BOE-A-2016-696", restored.review)
 
+    async def test_malformed_boe_json_is_logged_and_retried(self):
+        hass = FakeHass(cached_old())
+        instance = coordinator_module.TurGasCoordinator(hass)
+        await instance.async_load()
+        fake = FakeBOE({date(2026, 10, 1): (NEW_ID, TITLE)})
+        original_summary = fake.summary
+        broken = {date(2026, 9, 30)}
+
+        async def summary(url):
+            raw = url[-8:]
+            day = date(int(raw[:4]), int(raw[4:6]), int(raw[6:]))
+            if day in broken:
+                raise coordinator_module.BOESummaryFormatError("Invalid JSON")
+            return await original_summary(url)
+
+        instance._get_json = summary
+        instance._get_xml = fake.document
+        with patch.object(coordinator_module.dt_util, "now",
+                          return_value=datetime(2026, 10, 7)):
+            with self.assertLogs(coordinator_module.__name__, level="WARNING"):
+                first = await instance._async_update_data()
+        self.assertEqual(first["current"].boe_id, NEW_ID)
+        self.assertIn(date(2026, 9, 30), instance.pending_days)
+        self.assertIn("BOE retry pending", first["problem"])
+        restarted = coordinator_module.TurGasCoordinator(hass)
+        await restarted.async_load()
+        self.assertIn(date(2026, 9, 30), restarted.pending_days)
+        broken.clear()
+        restarted._get_json = summary
+        restarted._get_xml = fake.document
+        with patch.object(coordinator_module.dt_util, "now",
+                          return_value=datetime(2026, 10, 8)):
+            second = await restarted._async_update_data()
+        self.assertIsNone(second["problem"])
+        self.assertFalse(restarted.pending_days)
+
     async def test_unavailable_boe_on_first_start_fails(self):
         instance = coordinator_module.TurGasCoordinator(FakeHass())
         FakeBOE(failures={date(2026, 10, 7)}).attach(instance)
