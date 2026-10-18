@@ -1,25 +1,40 @@
-# TUR Gas BOE — Home Assistant
+# TUR Gas (BOE) — Home Assistant
 
-Integración personalizada de Home Assistant para obtener los precios regulados de la tarifa de último recurso (TUR) del gas natural en España desde fuentes oficiales.
+Integración personalizada para la tarifa de último recurso (TUR) del gas natural en España, que obtiene los precios regulados del [BOE](https://www.boe.es/) y, **opcionalmente**, el factor oficial de conversión de [Enagás](https://www.enagas.es/es/gestion-tecnica-sistema/energy-data/informacion-comercial/factor-conversion-facturacion/).
 
-> **Estado: en desarrollo.** Todavía no existe una versión instalable validada. No utilizar como fuente de cálculo de costes hasta verificar el parser contra XML reales del BOE.
+**Estado:** beta. No sustituye a la factura de la comercializadora ni incluye impuestos, alquiler de contador ni prorrateos del término fijo.
 
-## Diseño previsto
+## Sensores del BOE
 
-- Consulta del índice oficial del BOE; identificación de resoluciones por título y contenido, **sin depender del nombre del ministerio o la dirección general**.
-- Extracción y validación estrictas de las tablas de precios, unidades y fechas de vigencia.
-- Selección de modalidad TUR en el asistente de configuración (TUR.1 por defecto).
-- Sensores del término variable en €/kWh y término fijo en €/mes, con estadísticas de Home Assistant para el precio variable.
-- Persistencia local de los precios históricos y de la referencia exacta del BOE; conservación del último valor validado en caso de error.
-- Actualización automática y revisión de correcciones publicadas.
-- Icono de integración con recursos `brand/` para versiones compatibles de Home Assistant.
-- Diseñada para utilizarse con un sensor existente de consumo de gas en kWh y estimar el coste variable real día a día, **sin prorrateos de factura**.
+- Precio variable, en €/kWh, con clase de estado `measurement`.
+- Término fijo, en €/mes.
+- Fecha de vigencia de la resolución.
+- Última comprobación de los sumarios del BOE.
 
-## Siguientes verificaciones
+La modalidad TUR.1–TUR.11 es configurable. Las publicaciones y sus periodos de vigencia se conservan localmente; en caso de error no se sobrescriben las últimas tarifas válidas.
 
-1. Probar los formatos reales de la API de sumarios y los XML de las últimas resoluciones.
-2. Ajustar el lector de tablas, encabezados y fechas, y ampliar las pruebas de regresión.
-3. Validar instalación, configuración, sensores, icono y estadísticas en Home Assistant.
-4. Preparar una versión beta etiquetada y documentación de HACS.
+## Conversión oficial de Enagás (opcional)
 
-Fuente prevista: https://www.boe.es/datosabiertos/api/api.php
+En **Configurar > Opciones** de la integración se puede seleccionar:
+- **Zona de suministro:** lista oficial de municipios y zonas de distribución de Enagás.
+- **Presión de suministro:** valor en mbar, tal como corresponda al suministro.
+- **Tipo de lectura:** mensual o bimestral.
+
+Si se activa esta opción se añaden:
+- **Factor conversión Enagás**, en kWh/m³, con la fecha a la que corresponde.
+- **Precio variable por volumen**, en €/m³, calculado como precio BOE (€/kWh) × factor Enagás (kWh/m³).
+
+El factor se consulta para la fecha reciente más próxima disponible, y se actualiza en la actualización de medianoche de la integración. Si falla Enagás se mantiene el último valor validado, pero cuando tiene más de 14 días **el precio por volumen deja de mostrarse como actual**. La fuente, zona, presión, tipo de lectura y fecha quedan en los atributos.
+
+**Aviso técnico:** la web de Enagás ofrece estos datos mediante servicios JSON usados por su propia página, pero no se ha localizado una API pública estable documentada. Una modificación de su web podría requerir actualizar el cliente. Los errores se registran sin exponer direcciones privadas, claves ni datos del suministro.
+
+## Ejemplo contrastado
+
+Factura: Madrid 2 (`28MA2`), 22 mbar, lectura bimestral al 22/09/2026. Enagás proporciona un factor preciso de **10,6110152 kWh/m³**, que coincide con los coeficientes reflejados en la factura. Este valor **no debe utilizarse como constante para otros periodos**.
+
+## Desarrollo y seguridad
+
+- `tests/test_boe.py`, `tests/test_recovery.py`, `tests/test_coordinator.py` y `tests/test_enagas.py`: pruebas de regresión.
+- Validación automática mediante Ruff, unittest, Bandit, Gitleaks, CodeQL, HACS y hassfest.
+- Descargas solo de fuentes oficiales conocidas, con límites de tamaño y validación estricta de los datos.
+- No se requieren credenciales de Enagás ni del BOE.
