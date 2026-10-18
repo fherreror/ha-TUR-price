@@ -1,5 +1,4 @@
 """Replay regression: outages, published-before-effective, historical correction."""
-import asyncio
 from datetime import date
 from decimal import Decimal
 import importlib.util
@@ -20,8 +19,8 @@ for name in ("boe", "recovery"):
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
 
-from tur_gas_boe import recovery
-from tur_gas_boe.boe import Publication, Price
+from tur_gas_boe import recovery  # noqa: E402
+from tur_gas_boe.boe import Publication, Price  # noqa: E402
 
 TITLE = "Resolución por la que se publica la tarifa de último recurso de gas natural"
 CORRECTED = "Corrección de errores de la tarifa de último recurso de gas natural"
