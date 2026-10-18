@@ -184,7 +184,7 @@ class FakeBOE:
 
     async def document(self, identifier):
         return {OLD_ID: OLD_XML, NEW_ID: NEW_XML,
-                "BOE-A-2016-696": b"<documento>Corrección de errores</documento>"}[identifier]
+                "BOE-A-2016-696": "<documento>Corrección de errores</documento>".encode("utf-8")}[identifier]
 
     def attach(self, coordinator):
         coordinator._get_json = self.summary
