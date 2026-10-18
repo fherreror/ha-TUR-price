@@ -2,7 +2,7 @@
 
 Integración personalizada para la tarifa de último recurso (TUR) del gas natural en España, que obtiene los precios regulados del [BOE](https://www.boe.es/) y, **opcionalmente**, el factor oficial de conversión de [Enagás](https://www.enagas.es/es/gestion-tecnica-sistema/energy-data/informacion-comercial/factor-conversion-facturacion/).
 
-**Estado:** beta. No sustituye a la factura de la comercializadora ni incluye impuestos, alquiler de contador ni prorrateos del término fijo.
+**Estado:** versión estable 0.1.0 (primera publicación). No sustituye a la factura de la comercializadora ni incluye impuestos, alquiler de contador ni prorrateos del término fijo.
 
 ## Sensores del BOE
 
