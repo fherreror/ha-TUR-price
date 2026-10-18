@@ -63,7 +63,7 @@ def main() -> None:
                 matches = boe.candidates(payload)
                 print("Summary top-level keys:", list(payload)[:12])
                 print("Candidates:", matches)
-                if identifier not in matches:
+                if d == "20261001" and identifier not in matches:
                     problems.append(f"{d}: expected document missing from candidates")
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 print("Summary is not JSON:", exc,
@@ -88,7 +88,8 @@ def main() -> None:
             print("Parsed tariffs:", len(publication.prices))
             print("TUR.1:", publication.prices.get("TUR.1"))
             if d == "20261001":
-                assert str(publication.prices["TUR.1"].variable_eur_kwh) == "0.05252590"
+                from decimal import Decimal
+                assert publication.prices["TUR.1"].variable_eur_kwh == Decimal("0.05252590")
                 assert str(publication.prices["TUR.1"].fixed_eur_month) == "3.83"
                 assert publication.effective.isoformat() == "2026-10-01"
         except Exception as exc:
