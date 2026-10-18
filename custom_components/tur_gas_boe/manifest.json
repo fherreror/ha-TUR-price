@@ -1,0 +1,16 @@
+{
+  "domain": "tur_gas_boe",
+  "name": "TUR Gas (BOE)",
+  "codeowners": [
+    "@fherreror"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/fherreror/ha-TUR-price",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/fherreror/ha-TUR-price/issues",
+  "requirements": [
+    "defusedxml>=0.7.1"
+  ],
+  "version": "0.1.0b1"
+}
