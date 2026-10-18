@@ -6,18 +6,22 @@ from datetime import date
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import BOE_DOC, CONF_TARIFF, DOMAIN
+from .const import BOE_DOC, CONF_TARIFF, CONF_ENAGAS_ZONE, DOMAIN
+from .enagas import SOURCE_URL
 from .coordinator import TurGasCoordinator
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator: TurGasCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([
+    entities = [
         TurPriceSensor(coordinator, entry, "variable"),
         TurPriceSensor(coordinator, entry, "fixed"),
         TurDateSensor(coordinator, entry, "valid_from"),
         TurDateSensor(coordinator, entry, "last_checked"),
-    ])
+    ]
+    if entry.options.get(CONF_ENAGAS_ZONE):
+        entities.extend([TurConversionSensor(coordinator, entry), TurVolumePriceSensor(coordinator, entry)])
+    async_add_entities(entities)
 
 
 class TurBaseSensor(CoordinatorEntity[TurGasCoordinator], SensorEntity):
@@ -100,3 +104,58 @@ class TurDateSensor(TurBaseSensor):
             return self.coordinator.last_checked
         record = self.coordinator.current()
         return record.effective if record else None
+
+
+class TurConversionSensor(TurBaseSensor):
+    _attr_name = "Factor conversión Enagás"
+    _attr_icon = "mdi:gas-cylinder"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "kWh/m³"
+    _attr_suggested_display_precision = 7
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "enagas_factor")
+
+    @property
+    def native_value(self):
+        factor = self.coordinator.conversion
+        return factor.value if factor else None
+
+    @property
+    def extra_state_attributes(self):
+        factor = self.coordinator.conversion
+        return {
+            "source": "Enagás", "source_url": SOURCE_URL,
+            "valid_for_date": factor.measured_on.isoformat() if factor else None,
+            "zone": factor.zone if factor else None,
+            "pressure_mbar": factor.pressure_mbar if factor else None,
+            "reading_type": factor.reading_type if factor else None,
+            "problem": self.coordinator.enagas_problem,
+        }
+
+
+class TurVolumePriceSensor(TurBaseSensor):
+    _attr_name = "Precio variable por volumen"
+    _attr_icon = "mdi:currency-eur"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "€/m³"
+    _attr_suggested_display_precision = 6
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "variable_m3")
+
+    @property
+    def native_value(self):
+        record = self.coordinator.current()
+        factor = self.coordinator.conversion
+        if record is None or factor is None or self.tariff not in record.prices:
+            return None
+        return record.prices[self.tariff].variable_eur_kwh * factor.value
+
+    @property
+    def extra_state_attributes(self):
+        attrs = super().extra_state_attributes or {}
+        factor = self.coordinator.conversion
+        return {**attrs, "estimation": True, "conversion_source": SOURCE_URL,
+                "conversion_date": factor.measured_on.isoformat() if factor else None,
+                "enagas_problem": self.coordinator.enagas_problem}
