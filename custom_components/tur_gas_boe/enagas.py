@@ -5,6 +5,7 @@ No user accounts, addresses, credentials, or arbitrary URLs are transmitted.
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
@@ -72,23 +73,24 @@ async def _get_json(session: Any, url: str, params: dict | None = None) -> Any:
     """Consume the *full* response, checking limits after each received chunk."""
     if url not in (TOWNS_URL, PRESSURES_URL, FACTOR_URL):
         raise ValueError("Unsupported Enagás URL")
-    async with session.get(
-        url,
-        params=params,
-        headers={"Accept": "application/json"},
-    ) as response:
-        if response.status == 404:
-            return None
-        response.raise_for_status()
-        body = bytearray()
-        async for chunk in response.content.iter_chunked(CHUNK_SIZE):
-            if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
-                raise ValueError("Enagás response exceeded size limit")
-            body.extend(chunk)
-        try:
-            return json.loads(body)
-        except (ValueError, UnicodeDecodeError) as err:
-            raise ValueError("Invalid JSON from Enagás") from err
+    async with asyncio.timeout(12):
+        async with session.get(
+            url,
+            params=params,
+            headers={"Accept": "application/json"},
+        ) as response:
+            if response.status == 404:
+                return None
+            response.raise_for_status()
+            body = bytearray()
+            async for chunk in response.content.iter_chunked(CHUNK_SIZE):
+                if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
+                    raise ValueError("Enagás response exceeded size limit")
+                body.extend(chunk)
+            try:
+                return json.loads(body)
+            except (ValueError, UnicodeDecodeError) as err:
+                raise ValueError("Invalid JSON from Enagás") from err
 
 
 async def get_zones(session: Any) -> dict[str, str]:
