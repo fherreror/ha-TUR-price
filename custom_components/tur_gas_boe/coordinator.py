@@ -121,7 +121,7 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
                     "BOE daily summary contains invalid JSON: URL=%s, HTTP=%s, "
                     "content_type=%s, bytes=%s, exception=%s",
                     url, response.status,
-                    response.headers.get("Content-Type", "unknown"),
+                    getattr(response, "headers", {}).get("Content-Type", "unknown"),
                     len(data), err,
                 )
                 raise BOESummaryFormatError(
