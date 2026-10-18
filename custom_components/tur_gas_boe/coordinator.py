@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from decimal import Decimal
+import json
 import logging
 
 from aiohttp import ClientError, ClientTimeout
@@ -101,9 +102,16 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
             data = await response.content.read(_JSON_MAX_BYTES + 1)
             if len(data) > _JSON_MAX_BYTES:
                 raise ValueError("BOE summary size exceeded")
-            import json
-
-            parsed = json.loads(data)
+            try:
+                parsed = json.loads(data)
+            except (json.JSONDecodeError, UnicodeDecodeError) as err:
+                # Do not let one malformed BOE index block initial discovery.
+                # Keep the scan watermark unchanged to retry later.
+                self.problem = (
+                    f"Malformed BOE daily summary {url.rsplit('/', 1)[-1]}: {err}"
+                )
+                _LOGGER.warning("%s", self.problem)
+                return None
             if not isinstance(parsed, dict):
                 raise ValueError("Unexpected BOE summary format")
             return parsed
@@ -166,7 +174,8 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
             while cursor <= today:
                 await self._scan(cursor)
                 cursor += timedelta(days=1)
-            self.last_checked = today
+            if self.problem is None:
+                self.last_checked = today
             modified = True
         except (ClientError, TimeoutError, ValueError, UpdateFailed) as err:
             if not self.records:
@@ -177,7 +186,7 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
             modified = True
         if modified:
             await self._save()
-        if self.review:
+        if self.review and self.problem is None:
             self.problem = (
                 f"{len(self.review)} BOE publication(s) require review; "
                 "tariffs have not been overwritten by corrections"
