@@ -331,10 +331,11 @@ class TestCoordinator(unittest.IsolatedAsyncioTestCase):
         bad_day = date(2026, 9, 30)
         fake = FakeBOE({date(2026, 10, 1): (NEW_ID, TITLE)})
         normal = fake.summary
+        original_get_json = instance._get_json
 
         async def summary_with_bad_day(url):
             if url.endswith(bad_day.strftime("%Y%m%d")):
-                return await instance._get_json(url)
+                return await original_get_json(url)
             return await normal(url)
 
         with patch.object(coordinator_module, "async_get_clientsession",
