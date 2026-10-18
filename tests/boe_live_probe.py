@@ -1,18 +1,19 @@
-"""Probe the live official BOE API outside Home Assistant.
+"""Live regression test of detecting TUR publications in official BOE daily summaries.
 
-Only public BOE HTTPS endpoints are contacted. No credentials or personal data.
+Real publication dates (not the document signature dates or tariff effective dates).
+Negative days must not be mistaken for new TUR resolutions.
+Runs independently of Home Assistant. No user data or credentials are involved.
 """
 from __future__ import annotations
 
+from datetime import date
+from decimal import Decimal
 import importlib.util
-from pathlib import Path
 import json
-import re
+from pathlib import Path
 import sys
-import urllib.request
-
-from defusedxml import ElementTree as ET
-
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location(
@@ -22,84 +23,110 @@ boe = importlib.util.module_from_spec(spec)
 sys.modules["boe"] = boe
 spec.loader.exec_module(boe)
 
+# Maps publication date -> (official BOE document identifier, effective date).
+# Independently verified against the documents' "Publicado en" metadata.
+POSITIVE = {
+    "20251227": ("BOE-A-2025-26707", date(2026, 1, 1)),
+    "20260330": ("BOE-A-2026-7193", date(2026, 4, 1)),
+    "20260701": ("BOE-A-2026-14233", date(2026, 7, 1)),
+    "20261001": ("BOE-A-2026-20389", date(2026, 10, 1)),
+}
 
-def fetch(url: str, accept: str, limit: int = 6_000_000) -> bytes:
-    if not url.startswith("https://www.boe.es/"):
-        raise RuntimeError("Refusing non-official URL")
-    request = urllib.request.Request(
-        url, headers={"Accept": accept, "User-Agent": "ha-TUR-price-validation/0.1"}
+# Before and after publication dates, including days near quarter boundaries.
+NEGATIVE = (
+    "20251226",
+    "20251229",
+    "20260328",
+    "20260331",
+    "20260630",
+    "20260702",
+    "20260930",
+    "20261002",
+)
+
+
+def fetch(path: str, *, accept: str, limit: int = 5_000_000) -> bytes | None:
+    url = f"https://www.boe.es/{path}"
+    req = Request(
+        url,
+        headers={"Accept": accept, "User-Agent": "ha-TUR-price-validation/0.1"},
     )
-    with urllib.request.urlopen(request, timeout=35) as response:
-        body = response.read(limit + 1)
-        if len(body) > limit:
-            raise RuntimeError("Oversized BOE response")
-        print("GET", url, "=>", response.status,
-              response.headers.get("Content-Type"), len(body), "bytes")
-        return body
+    try:
+        with urlopen(req, timeout=35) as response:
+            data = response.read(limit + 1)
+            if len(data) > limit:
+                raise ValueError("Official response exceeded size limit")
+            return data
+    except HTTPError as err:
+        if err.code == 404:
+            return None
+        raise
 
 
-def shape(root):
-    by_tag = {}
-    for el in root.iter():
-        tag = el.tag.rsplit("}", 1)[-1]
-        by_tag[tag] = by_tag.get(tag, 0) + 1
-    return sorted(by_tag.items(), key=lambda x: -x[1])[:25]
+def check_day(day: str) -> dict[str, str]:
+    data = fetch(
+        f"datosabiertos/api/boe/sumario/{day}", accept="application/json"
+    )
+    if data is None:
+        print(f"{day}: no BOE daily summary (404), zero candidates")
+        return {}
+    summary = json.loads(data)
+    found = boe.candidates(summary)
+    print(f"{day}: {len(found)} matching TUR resolutions: {list(found)}")
+    return found
 
 
 def main() -> None:
-    problems = []
-    for d, identifier in [
-        ("20261001", "BOE-A-2026-20389"),
-        ("20260401", "BOE-A-2026-7193"),
-    ]:
-        print("\nCHECK", d, identifier)
+    errors: list[str] = []
+    for published, (expected_id, effective_date) in POSITIVE.items():
         try:
-            summary = fetch(
-                f"https://www.boe.es/datosabiertos/api/boe/sumario/{d}",
-                "application/json",
+            matching = check_day(published)
+            if expected_id not in matching:
+                raise ValueError(
+                    f"expected {expected_id}, found {list(matching)}"
+                )
+            data = fetch(
+                f"diario_boe/xml.php?id={expected_id}",
+                accept="application/xml",
             )
-            try:
-                payload = json.loads(summary)
-                matches = boe.candidates(payload)
-                print("Summary top-level keys:", list(payload)[:12])
-                print("Candidates:", matches)
-                if d == "20261001" and identifier not in matches:
-                    problems.append(f"{d}: expected document missing from candidates")
-            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-                print("Summary is not JSON:", exc,
-                      "first characters", repr(summary[:180]))
-                problems.append(f"{d}: JSON summary format unexpected")
-            document = fetch(
-                f"https://www.boe.es/diario_boe/xml.php?id={identifier}",
-                "application/xml",
-            )
-            root = ET.fromstring(document)
-            print("XML tags:", shape(root))
-            for element in root.iter():
-                tag = element.tag.rsplit("}", 1)[-1].lower()
-                if tag in ("table", "tabla"):
-                    print("Sample table tags:",
-                          [n.tag.rsplit("}", 1)[-1] for n in list(element)[:5]])
-                    print("Sample table text:",
-                          " ".join(element.itertext())[:350])
-                    break
-            publication = boe.parse_document(document, identifier)
-            print("Parsed effective date:", publication.effective)
-            print("Parsed tariffs:", len(publication.prices))
-            print("TUR.1:", publication.prices.get("TUR.1"))
-            if d == "20261001":
-                from decimal import Decimal
-                assert publication.prices["TUR.1"].variable_eur_kwh == Decimal("0.05252590")
-                assert str(publication.prices["TUR.1"].fixed_eur_month) == "3.83"
-                assert publication.effective.isoformat() == "2026-10-01"
+            if data is None:
+                raise ValueError("Published BOE document XML not found")
+            parsed = boe.parse_document(data, expected_id)
+            if parsed.effective != effective_date:
+                raise ValueError(
+                    f"effective {parsed.effective}, expected {effective_date}"
+                )
+            if len(parsed.prices) != 11 or "TUR.1" not in parsed.prices:
+                raise ValueError(f"expected 11 TUR tariffs; got {len(parsed.prices)}")
+            if published == "20261001":
+                if parsed.prices["TUR.1"].variable_eur_kwh != Decimal("0.05252590"):
+                    raise ValueError("October TUR.1 variable price mismatch")
+                if parsed.prices["TUR.1"].fixed_eur_month != Decimal("3.83"):
+                    raise ValueError("October TUR.1 fixed price mismatch")
+            print(f"  PASS: {expected_id}, effective {effective_date}, "
+                  f"TUR.1 {parsed.prices['TUR.1'].variable_eur_kwh} €/kWh")
         except Exception as exc:
-            print("ERROR:", type(exc).__name__, str(exc))
-            problems.append(f"{identifier}: {type(exc).__name__}: {exc}")
-    print("\nRESULT", "PASS" if not problems else "FAIL")
-    for problem in problems:
-        print("ISSUE", problem)
-    if problems:
-        raise SystemExit(1)
+            errors.append(f"POSITIVE {published}: {type(exc).__name__}: {exc}")
+
+    for published in NEGATIVE:
+        try:
+            matching = check_day(published)
+            if matching:
+                raise ValueError(
+                    f"unexpected TUR publications: {list(matching)}"
+                )
+            print(f"  PASS: no new TUR publication on {published}")
+        except Exception as exc:
+            errors.append(f"NEGATIVE {published}: {type(exc).__name__}: {exc}")
+
+    if errors:
+        for error in errors:
+            print("FAIL:", error)
+        raise SystemExit(f"{len(errors)} BOE publication detection checks failed")
+    print(
+        f"PASS: {len(POSITIVE)} real positive publication dates, "
+        f"{len(NEGATIVE)} negative dates, and {len(POSITIVE)} verified XML documents"
+    )
 
 
 if __name__ == "__main__":
