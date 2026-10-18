@@ -62,16 +62,18 @@ class TurGasOptionsFlow(config_entries.OptionsFlow):
                     user_input.pop(CONF_ENAGAS_READING, None)
                 return self.async_create_entry(title="", data=user_input)
         tariff = options.get(CONF_TARIFF, self.config_entry.data[CONF_TARIFF])
+        pressure_field = vol.Optional(CONF_ENAGAS_PRESSURE)
+        if CONF_ENAGAS_PRESSURE in options:
+            pressure_field = vol.Optional(
+                CONF_ENAGAS_PRESSURE, default=options[CONF_ENAGAS_PRESSURE]
+            )
         return self.async_show_form(
             step_id="init",
             errors=errors,
             data_schema=vol.Schema({
                 vol.Required(CONF_TARIFF, default=tariff): vol.In(TARIFFS),
                 vol.Required(CONF_ENAGAS_ZONE, default=selected): vol.In(choices),
-                vol.Optional(
-                    CONF_ENAGAS_PRESSURE,
-                    default=options.get(CONF_ENAGAS_PRESSURE, 22),
-                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=500)),
+                pressure_field: vol.All(vol.Coerce(int), vol.Range(min=1, max=500)),
                 vol.Optional(
                     CONF_ENAGAS_READING,
                     default=options.get(CONF_ENAGAS_READING, "Bimestral"),
