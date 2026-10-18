@@ -6,7 +6,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_time_change
 
-from .const import DOMAIN
+from .const import DOMAIN, CONF_ENAGAS_ZONE
 from .coordinator import TurGasCoordinator
 
 PLATFORMS = [Platform.SENSOR]
@@ -17,12 +17,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = TurGasCoordinator(hass)
     await coordinator.async_load()
     await coordinator.async_config_entry_first_refresh()
+    if entry.options.get(CONF_ENAGAS_ZONE):
+        await coordinator.async_refresh_enagas(entry.options)
     hass.data[DOMAIN][entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
     async def refresh_at_midnight(now) -> None:
         await coordinator.async_request_refresh()
+        if entry.options.get(CONF_ENAGAS_ZONE):
+            await coordinator.async_refresh_enagas(entry.options)
+            coordinator.async_update_listeners()
 
     entry.async_on_unload(
         async_track_time_change(hass, refresh_at_midnight, hour=0, minute=0, second=1)
