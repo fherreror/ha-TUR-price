@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Spanish regulated gas tariff (BOE)",
+        "data": {
+          "tariff": "TUR tariff"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure TUR tariff",
+        "data": {
+          "tariff": "TUR tariff"
+        }
+      }
+    }
+  }
+}

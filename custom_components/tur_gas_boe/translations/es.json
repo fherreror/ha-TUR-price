@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Tarifa de último recurso de gas (BOE)",
+        "data": {
+          "tariff": "Modalidad TUR"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configurar modalidad TUR",
+        "data": {
+          "tariff": "Modalidad TUR"
+        }
+      }
+    }
+  }
+}
