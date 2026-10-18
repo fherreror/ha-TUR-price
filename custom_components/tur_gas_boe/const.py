@@ -7,3 +7,7 @@ BOE_XML = "https://www.boe.es/diario_boe/xml.php?id={id}"
 BOE_DOC = "https://www.boe.es/buscar/doc.php?id={id}"
 STORE_VERSION = 1
 UPDATE_HOURS = 12
+
+CONF_ENAGAS_ZONE = "enagas_zone"
+CONF_ENAGAS_PRESSURE = "enagas_pressure"
+CONF_ENAGAS_READING = "enagas_reading_type"
