@@ -303,6 +303,53 @@ class TestCoordinator(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await integration.async_unload_entry(hass, entry))
             self.assertNotIn("dummy-entry", hass.data["tur_gas_boe"])
 
+    async def test_malformed_boe_daily_summary_is_skipped_and_retried(self):
+        class StubContent:
+            async def read(self, limit):
+                return b'{"status": {"value": invalid json}}'
+
+        class StubResponse:
+            status = 200
+            content = StubContent()
+
+            def raise_for_status(self):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class StubSession:
+            def get(self, *args, **kwargs):
+                return StubResponse()
+
+        hass = FakeHass(cached_old("2026-09-28"))
+        instance = coordinator_module.TurGasCoordinator(hass)
+        await instance.async_load()
+        bad_day = date(2026, 9, 30)
+        fake = FakeBOE({date(2026, 10, 1): (NEW_ID, TITLE)})
+        normal = fake.summary
+
+        async def summary_with_bad_day(url):
+            if url.endswith(bad_day.strftime("%Y%m%d")):
+                return await instance._get_json(url)
+            return await normal(url)
+
+        with patch.object(coordinator_module, "async_get_clientsession",
+                          return_value=StubSession()):
+            instance._get_json = summary_with_bad_day
+            instance._get_xml = fake.document
+            with patch.object(coordinator_module.dt_util, "now",
+                              return_value=datetime(2026, 10, 4)):
+                state = await instance._async_update_data()
+        self.assertEqual(state["current"].boe_id, NEW_ID)
+        self.assertIn("20260930", state["problem"])
+        self.assertEqual(instance.last_checked, date(2026, 9, 28))
+        self.assertEqual(hass.storage["tur_gas_boe.tariffs"]["last_checked"],
+                         "2026-09-28")
+
 
 if __name__ == "__main__":
     unittest.main()
