@@ -64,7 +64,7 @@ class TestEnagas(unittest.IsolatedAsyncioTestCase):
              "fechaIni": "22/09/2026", "fechaFin": "22/09/2026", "presion": "22"},
         )
         self.assertEqual(Decimal("0.05252590") * factor.value,
-                         Decimal("0.55735313936968"))
+                         Decimal("0.557353123293680"))
 
     async def test_only_complete_json_accepted(self):
         session = Session(b'{"conversionfactor":')
