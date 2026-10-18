@@ -339,10 +339,109 @@ class TestCoordinator(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await integration.async_unload_entry(hass, entry))
             self.assertNotIn("dummy-entry", hass.data["tur_gas_boe"])
 
+    async def test_boe_json_stream_reads_all_chunks(self):
+        import json
+
+        class SplitBody:
+            async def iter_chunked(self, size):
+                full = json.dumps({
+                    "data": [{"identificador": NEW_ID, "titulo": TITLE}],
+                    "padding": "x" * 200000,
+                }).encode("utf-8")
+                for start in range(0, len(full), 15925):
+                    yield full[start:start + 15925]
+
+        class Response:
+            status = 200
+            headers = {"Content-Type": "application/json"}
+            content = SplitBody()
+
+            def raise_for_status(self):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class Session:
+            def get(self, *args, **kwargs):
+                return Response()
+
+        instance = coordinator_module.TurGasCoordinator(FakeHass())
+        with patch.object(coordinator_module, "async_get_clientsession",
+                          return_value=Session()):
+            result = await instance._get_json(
+                "https://www.boe.es/datosabiertos/api/boe/sumario/20261001"
+            )
+        self.assertEqual(result["data"][0]["identificador"], NEW_ID)
+        self.assertEqual(len(result["padding"]), 200000)
+
+    async def test_boe_xml_stream_reads_all_chunks(self):
+        class SplitBody:
+            async def iter_chunked(self, size):
+                for start in range(0, len(NEW_XML), 7):
+                    yield NEW_XML[start:start + 7]
+
+        class Response:
+            status = 200
+            content = SplitBody()
+
+            def raise_for_status(self):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class Session:
+            def get(self, *args, **kwargs):
+                return Response()
+
+        instance = coordinator_module.TurGasCoordinator(FakeHass())
+        with patch.object(coordinator_module, "async_get_clientsession",
+                          return_value=Session()):
+            result = await instance._get_xml(NEW_ID)
+        self.assertEqual(result, NEW_XML)
+
+    async def test_oversized_stream_is_rejected(self):
+        class HugeBody:
+            async def iter_chunked(self, size):
+                yield b"x" * coordinator_module._JSON_MAX_BYTES
+                yield b"!"
+
+        class Response:
+            status = 200
+            content = HugeBody()
+
+            def raise_for_status(self):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class Session:
+            def get(self, *args, **kwargs):
+                return Response()
+
+        instance = coordinator_module.TurGasCoordinator(FakeHass())
+        with patch.object(coordinator_module, "async_get_clientsession",
+                          return_value=Session()):
+            with self.assertRaisesRegex(ValueError, "size exceeded"):
+                await instance._get_json(
+                    "https://www.boe.es/datosabiertos/api/boe/sumario/20261001"
+                )
+
     async def test_malformed_boe_daily_summary_is_skipped_and_retried(self):
         class StubContent:
-            async def read(self, limit):
-                return b'{"status": {"value": invalid json}}'
+            async def iter_chunked(self, size):
+                yield b'{"status": {"value": invalid json}}'
 
         class StubResponse:
             status = 200
