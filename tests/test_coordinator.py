@@ -311,6 +311,72 @@ class TestCoordinator(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(second["problem"])
         self.assertFalse(restarted.pending_days)
 
+
+    async def test_enagas_factor_persisted_and_restored(self):
+        from tur_gas_boe.enagas import ConversionFactor
+        from unittest.mock import AsyncMock
+
+        hass = FakeHass(cached_old())
+        instance = coordinator_module.TurGasCoordinator(hass)
+        await instance.async_load()
+        factor = ConversionFactor(
+            Decimal("10.6110152"), date(2026, 10, 6), "28MA2", 22, "Bimestral",
+        )
+        options = {
+            "enagas_zone": "28MA2",
+            "enagas_pressure": 22,
+            "enagas_reading_type": "Bimestral",
+        }
+        with patch.object(coordinator_module.dt_util, "now",
+                          return_value=datetime(2026, 10, 7)), patch.object(
+                          coordinator_module, "get_recent_factor",
+                          new=AsyncMock(return_value=factor)):
+            await instance.async_refresh_enagas(options)
+            self.assertEqual(instance.current_conversion().value,
+                             Decimal("10.6110152"))
+        restored = coordinator_module.TurGasCoordinator(hass)
+        await restored.async_load()
+        self.assertEqual(restored.conversion.value, Decimal("10.6110152"))
+        self.assertEqual(restored.conversion.zone, "28MA2")
+
+    async def test_enagas_outage_does_not_affect_boe(self):
+        from tur_gas_boe.enagas import ConversionFactor
+        from unittest.mock import AsyncMock
+
+        hass = FakeHass(cached_old())
+        instance = coordinator_module.TurGasCoordinator(hass)
+        await instance.async_load()
+        factor = ConversionFactor(
+            Decimal("10.6110152"), date(2026, 10, 6), "28MA2", 22, "Bimestral",
+        )
+        instance.conversion = factor
+        options = {
+            "enagas_zone": "28MA2",
+            "enagas_pressure": 22,
+            "enagas_reading_type": "Bimestral",
+        }
+        with patch.object(coordinator_module.dt_util, "now",
+                          return_value=datetime(2026, 10, 7)), patch.object(
+                          coordinator_module, "get_recent_factor",
+                          new=AsyncMock(side_effect=ValueError("No current data"))):
+            await instance.async_refresh_enagas(options)
+            self.assertEqual(instance.current_conversion(), factor)
+        self.assertIsNotNone(instance.enagas_problem)
+        self.assertEqual(instance.current(date(2026, 10, 7)).boe_id, OLD_ID)
+
+    async def test_outdated_factor_not_shown_as_current(self):
+        from tur_gas_boe.enagas import ConversionFactor
+
+        instance = coordinator_module.TurGasCoordinator(FakeHass())
+        instance.conversion = ConversionFactor(
+            Decimal("10.6110152"), date(2026, 9, 22),
+            "28MA2", 22, "Bimestral",
+        )
+        with patch.object(coordinator_module.dt_util, "now",
+                          return_value=datetime(2026, 10, 18)):
+            self.assertIsNone(instance.current_conversion())
+            self.assertIsNotNone(instance.conversion)
+
     async def test_unavailable_boe_on_first_start_fails(self):
         instance = coordinator_module.TurGasCoordinator(FakeHass())
         FakeBOE(failures={date(2026, 10, 7)}).attach(instance)

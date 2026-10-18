@@ -15,6 +15,8 @@ from homeassistant.util import dt as dt_util
 
 from .boe import Publication, Price, candidates
 from .recovery import TariffLedger, recovery_start
+from .enagas import ConversionFactor, get_recent_factor
+from .const import CONF_ENAGAS_ZONE, CONF_ENAGAS_PRESSURE, CONF_ENAGAS_READING
 from .const import BOE_SUMMARY, BOE_XML, DOMAIN, STORE_VERSION, UPDATE_HOURS
 
 _LOGGER = logging.getLogger(__name__)
@@ -57,6 +59,8 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
         self.problem: str | None = None
         self.review: dict[str, str] = {}
         self.pending_days: set[date] = set()
+        self.conversion: ConversionFactor | None = None
+        self.enagas_problem: str | None = None
 
     async def async_load(self) -> None:
         raw = await self.store.async_load() or {}
@@ -79,6 +83,20 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
                 self.pending_days.add(date.fromisoformat(value))
             except (ValueError, TypeError):
                 _LOGGER.warning("Discarding invalid cached BOE retry date")
+        cached = raw.get("enagas_factor")
+        if isinstance(cached, dict):
+            try:
+                from .enagas import valid_zone, valid_pressure, READING_TYPES
+                value = Decimal(cached["value"])
+                day = date.fromisoformat(cached["date"])
+                zone = valid_zone(cached["zone"])
+                pressure = valid_pressure(int(cached["pressure"]))
+                reading = cached["reading_type"]
+                if not Decimal("5") < value < Decimal("20") or reading not in READING_TYPES:
+                    raise ValueError("Invalid saved factor")
+                self.conversion = ConversionFactor(value, day, zone, pressure, reading)
+            except (ValueError, KeyError, TypeError, ArithmeticError):
+                _LOGGER.warning("Discarding invalid saved Enagás factor")
         if raw.get("last_checked"):
             try:
                 self.last_checked = date.fromisoformat(raw["last_checked"])
@@ -90,6 +108,13 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
             "last_checked": self.last_checked.isoformat() if self.last_checked else None,
             "review": self.review,
             "pending_days": sorted(day.isoformat() for day in self.pending_days),
+            "enagas_factor": ({
+                "value": str(self.conversion.value),
+                "date": self.conversion.measured_on.isoformat(),
+                "zone": self.conversion.zone,
+                "pressure": self.conversion.pressure_mbar,
+                "reading_type": self.conversion.reading_type,
+            } if self.conversion is not None else None),
             "records": {
                 effective: {
                     "boe_id": record.boe_id,
@@ -193,6 +218,38 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
             ledger.records, ledger.published, ledger.review
         )
         self.pending_days.discard(day)
+
+    def current_conversion(self) -> ConversionFactor | None:
+        """Do not present an obsolete conversion as the current price."""
+        factor = self.conversion
+        if factor is None:
+            return None
+        age = (dt_util.now().date() - factor.measured_on).days
+        return factor if 0 <= age <= 14 else None
+
+    async def async_refresh_enagas(self, options: dict) -> None:
+        """Retrieve the official factor without affecting the BOE price update."""
+        zone = options.get(CONF_ENAGAS_ZONE)
+        self.enagas_problem = None
+        if not zone:
+            self.conversion = None
+            return
+        pressure = options.get(CONF_ENAGAS_PRESSURE)
+        reading = options.get(CONF_ENAGAS_READING, "Bimestral")
+        if self.conversion is not None and (
+            self.conversion.zone != zone or self.conversion.pressure_mbar != pressure
+            or self.conversion.reading_type != reading
+        ):
+            self.conversion = None
+        try:
+            self.conversion = await get_recent_factor(
+                async_get_clientsession(self.hass),
+                zone, pressure, reading, dt_util.now().date(),
+            )
+            await self._save()
+        except (ClientError, TimeoutError, ValueError, TypeError) as err:
+            self.enagas_problem = str(err)
+            _LOGGER.warning("Enagás factor not available for %s: %s", zone, err)
 
     async def _async_update_data(self) -> dict:
         today = dt_util.now().date()
