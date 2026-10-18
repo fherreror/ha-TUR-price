@@ -118,7 +118,7 @@ class TurConversionSensor(TurBaseSensor):
 
     @property
     def native_value(self):
-        factor = self.coordinator.conversion
+        factor = self.coordinator.current_conversion()
         return factor.value if factor else None
 
     @property
@@ -131,6 +131,7 @@ class TurConversionSensor(TurBaseSensor):
             "pressure_mbar": factor.pressure_mbar if factor else None,
             "reading_type": factor.reading_type if factor else None,
             "problem": self.coordinator.enagas_problem,
+            "stale": factor is not None and self.coordinator.current_conversion() is None,
         }
 
 
@@ -147,7 +148,7 @@ class TurVolumePriceSensor(TurBaseSensor):
     @property
     def native_value(self):
         record = self.coordinator.current()
-        factor = self.coordinator.conversion
+        factor = self.coordinator.current_conversion()
         if record is None or factor is None or self.tariff not in record.prices:
             return None
         return record.prices[self.tariff].variable_eur_kwh * factor.value
@@ -158,4 +159,5 @@ class TurVolumePriceSensor(TurBaseSensor):
         factor = self.coordinator.conversion
         return {**attrs, "estimation": True, "conversion_source": SOURCE_URL,
                 "conversion_date": factor.measured_on.isoformat() if factor else None,
-                "enagas_problem": self.coordinator.enagas_problem}
+                "enagas_problem": self.coordinator.enagas_problem,
+                "stale": factor is not None and self.coordinator.current_conversion() is None}
