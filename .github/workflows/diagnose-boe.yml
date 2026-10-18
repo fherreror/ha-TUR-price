@@ -1,0 +1,49 @@
+name: Diagnose BOE daily summary JSON
+on:
+  push:
+    branches: [fix/boe-json-bootstrap]
+    paths: [.github/workflows/diagnose-boe.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - name: Inspect recent official daily summaries (no private data)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import datetime as dt
+          import json
+          import urllib.error
+          import urllib.request
+          from collections import Counter
+          start=dt.date(2026,10,18)
+          findings=Counter()
+          for ago in range(25):
+              day=start-dt.timedelta(days=ago)
+              url="https://www.boe.es/datosabiertos/api/boe/sumario/"+day.strftime("%Y%m%d")
+              try:
+                  request=urllib.request.Request(url,headers={"Accept":"application/json","User-Agent":"ha-TUR-price/diagnostic"})
+                  with urllib.request.urlopen(request,timeout=25) as response:
+                      data=response.read(5000001)
+                      content_type=response.headers.get("Content-Type")
+                  try:
+                      result=json.loads(data)
+                      print(day,"VALID_JSON",len(data),content_type,"keys",list(result)[:4],flush=True)
+                      findings["valid"]+=1
+                  except (ValueError,UnicodeError) as err:
+                      print(day,"INVALID_JSON",len(data),content_type,str(err),flush=True)
+                      findings["invalid"]+=1
+              except urllib.error.HTTPError as err:
+                  print(day,"HTTP",err.code,flush=True)
+                  findings["http"]+=1
+              except Exception as err:
+                  print(day,"NETWORK_ERROR",type(err).__name__,str(err),flush=True)
+                  findings["network"]+=1
+          print("TOTAL",dict(findings),flush=True)
+          if findings["invalid"]:
+              raise SystemExit("Malformed BOE summary JSON found; requires handling")
+          PY
