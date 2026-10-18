@@ -21,6 +21,21 @@ _LOGGER = logging.getLogger(__name__)
 _TIMEOUT = ClientTimeout(total=20)
 _XML_MAX_BYTES = 2_000_000
 _JSON_MAX_BYTES = 5_000_000
+_HTTP_READ_CHUNK = 64 * 1024
+
+
+async def _read_bounded_body(response, maximum: int, label: str) -> bytes:
+    """Read through EOF, rejecting oversized responses before storing them.
+
+    aiohttp StreamReader.read(n) may return fewer than n bytes even when more
+    are coming: a single read is not enough to obtain the full BOE document.
+    """
+    body = bytearray()
+    async for chunk in response.content.iter_chunked(_HTTP_READ_CHUNK):
+        if len(body) + len(chunk) > maximum:
+            raise ValueError(f"{label} size exceeded ({maximum} bytes)")
+        body.extend(chunk)
+    return bytes(body)
 
 
 class BOESummaryFormatError(ValueError):
@@ -111,9 +126,9 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
             if response.status == 404:
                 return None
             response.raise_for_status()
-            data = await response.content.read(_JSON_MAX_BYTES + 1)
-            if len(data) > _JSON_MAX_BYTES:
-                raise ValueError(f"BOE summary too large: {url}")
+            data = await _read_bounded_body(
+                response, _JSON_MAX_BYTES, f"BOE summary {url}"
+            )
             try:
                 parsed = json.loads(data)
             except (json.JSONDecodeError, UnicodeDecodeError) as err:
@@ -143,10 +158,9 @@ class TurGasCoordinator(DataUpdateCoordinator[dict]):
             BOE_XML.format(id=identifier), timeout=_TIMEOUT
         ) as response:
             response.raise_for_status()
-            data = await response.content.read(_XML_MAX_BYTES + 1)
-            if len(data) > _XML_MAX_BYTES:
-                raise ValueError("BOE XML size exceeded")
-            return data
+            return await _read_bounded_body(
+                response, _XML_MAX_BYTES, f"BOE XML {identifier}"
+            )
 
     async def _scan(self, day: date) -> None:
         url = BOE_SUMMARY.format(date=day.strftime("%Y%m%d"))
